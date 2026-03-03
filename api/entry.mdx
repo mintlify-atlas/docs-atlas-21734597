@@ -178,9 +178,9 @@ await entry({
     console.log(`Server listening on port ${env.PORT}`);
     
     // Return cleanup function
-    return async () => {
+    return () => {
       console.log("Shutting down...");
-      await extras.db.disconnect();
+      void extras.db.disconnect();
       server.close();
     };
   }
@@ -237,10 +237,10 @@ await entry({
     
     // Your service logic using redis and pg
     
-    return async () => {
+    return () => {
       console.log("Cleaning up...");
-      await redis.quit();
-      await pg.end();
+      void redis.quit();
+      void pg.end();
     };
   }
 });

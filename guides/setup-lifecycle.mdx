@@ -131,9 +131,9 @@ await entry({
     
     console.log("Services initialized");
     
-    return async () => {
-      await extras.db.end();
-      await extras.redis.disconnect();
+    return () => {
+      void extras.db.end();
+      void extras.redis.disconnect();
     };
   }
 });
@@ -177,8 +177,8 @@ await entry({
     
     console.log(`Found ${result.rows.length} active users`);
     
-    return async () => {
-      await extras.pool.end();
+    return () => {
+      void extras.pool.end();
     };
   }
 });

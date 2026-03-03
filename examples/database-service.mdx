@@ -133,7 +133,7 @@ This example shows a realistic API server that connects to PostgreSQL during sta
         });
         
         // Graceful shutdown: close server AND database
-        return async () => {
+        return () => {
           console.log("Shutting down gracefully...");
           
           // Stop accepting new connections
@@ -142,9 +142,10 @@ This example shows a realistic API server that connects to PostgreSQL during sta
           });
           
           // Close database connections
-          await pool.end();
-          console.log("Database connections closed");
-          console.log("Shutdown complete");
+          void pool.end().then(() => {
+            console.log("Database connections closed");
+            console.log("Shutdown complete");
+          });
         };
       },
     });
@@ -346,12 +347,12 @@ main: ({ env, extras }) => {
   
   const server = app.listen(Number(env.PORT));
   
-  return async () => {
+  return () => {
     console.log("Starting graceful shutdown...");
     const shutdownTimeout = 30000; // 30 seconds
     
-    // Race shutdown against timeout
-    await Promise.race([
+    // Race shutdown against timeout (fire and forget)
+    void Promise.race([
       (async () => {
         // Close server (stops accepting connections)
         await new Promise((resolve) => server.close(resolve));

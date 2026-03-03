@@ -109,9 +109,9 @@ type MaybeCleanupFunction = (() => void) | undefined;
 
 This represents a function with no parameters that returns void, or `undefined` if no cleanup is needed.
 
-<Note>
-  The cleanup function must be synchronous. If you need async cleanup, await your async operations inside a sync wrapper.
-</Note>
+<Warning>
+  The cleanup function must be synchronous `(() => void)`. If you need to perform async operations during cleanup, wrap them in a fire-and-forget pattern using `void` or handle them with promises that don't block the return.
+</Warning>
 
 #### Example
 

@@ -113,10 +113,10 @@ entry({
     });
 
     // Return cleanup function for graceful shutdown
-    return async () => {
+    return () => {
       console.log("Shutting down server...");
       server.close();
-      await extras.db.disconnect();
+      void extras.db.disconnect();
       console.log("Cleanup complete");
     };
   },
