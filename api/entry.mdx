@@ -1,0 +1,247 @@
+---
+title: entry()
+description: Create a Node.js service entrypoint with environment validation and lifecycle management
+---
+
+## Overview
+
+The `entry()` function is the core of EntryKit. It creates a structured entrypoint for your Node.js service with:
+
+- Environment variable validation using arktype
+- Optional setup phase for initializing resources
+- Automatic cleanup on SIGTERM and SIGINT signals
+- Type-safe environment and setup results
+
+## Function signatures
+
+### With setup
+
+```typescript
+async function entry<EnvType extends Type, SetupResult>(
+  options: WithSetup<EnvType, SetupResult>
+): Promise<MaybeCleanupFunction>
+```
+
+### Without setup
+
+```typescript
+async function entry<EnvType extends Type>(
+  options: WithoutSetup<EnvType>
+): Promise<MaybeCleanupFunction>
+```
+
+## Parameters
+
+### WithSetup options
+
+Use this overload when you need to initialize resources before your main service starts.
+
+<ParamField path="name" type="string" required>
+  The name of your service. Used for logging and identification.
+</ParamField>
+
+<ParamField path="env" type="Type">
+  An arktype schema for validating environment variables. If provided, `process.env` will be validated against this schema at startup.
+</ParamField>
+
+<ParamField path="setup" type="(options: { env: EnvType['inferOut'] }) => MaybePromise<SetupResult>" required>
+  Async or sync function that runs before `main`. Use this to initialize databases, connections, or other resources.
+  
+  The `setup` function receives:
+  - `env`: The validated environment variables (typed as `EnvType['inferOut']`)
+  
+  Returns a value (or Promise) that will be passed to `main` as `extras`.
+</ParamField>
+
+<ParamField path="main" type="(options: { env: EnvType['inferOut']; extras: Awaited<SetupResult> }) => MaybePromise<MaybeCleanupFunction>" required>
+  The main service function. This runs after `setup` completes.
+  
+  The `main` function receives:
+  - `env`: The validated environment variables
+  - `extras`: The result from the `setup` function
+  
+  Optionally returns a cleanup function that will be called on SIGTERM or SIGINT.
+</ParamField>
+
+### WithoutSetup options
+
+Use this overload for simpler services that don't need a setup phase.
+
+<ParamField path="name" type="string" required>
+  The name of your service. Used for logging and identification.
+</ParamField>
+
+<ParamField path="env" type="Type">
+  An arktype schema for validating environment variables. If provided, `process.env` will be validated against this schema at startup.
+</ParamField>
+
+<ParamField path="main" type="(options: { env: EnvType['inferOut'] }) => MaybePromise<MaybeCleanupFunction>" required>
+  The main service function.
+  
+  The `main` function receives:
+  - `env`: The validated environment variables
+  
+  Optionally returns a cleanup function that will be called on SIGTERM or SIGINT.
+</ParamField>
+
+## Return value
+
+<ResponseField name="return" type="Promise<MaybeCleanupFunction>">
+  Returns a Promise that resolves to the cleanup function returned by `main`, or `undefined` if no cleanup function was provided.
+</ResponseField>
+
+## Behavior
+
+### Environment validation
+
+If an `env` schema is provided, `entry()` validates `process.env` against it using arktype's `.assert()` method. If validation fails, arktype will throw an error with details about what went wrong.
+
+### Lifecycle
+
+1. Validate environment variables (if `env` is provided)
+2. Run `setup()` function (if provided) and await its result
+3. Run `main()` function with validated env and setup results
+4. Register the returned cleanup function (if any) for SIGTERM and SIGINT signals
+
+### Signal handling
+
+If your `main` function returns a cleanup function, EntryKit automatically registers it to run on:
+
+- `SIGTERM` - Graceful shutdown signal (used by Docker, Kubernetes, etc.)
+- `SIGINT` - Interrupt signal (Ctrl+C in terminal)
+
+The cleanup function is registered using `process.once()`, so it will only run once even if multiple signals are received.
+
+<Note>
+  The cleanup function is optional. If your service doesn't need cleanup logic, simply don't return anything from `main`.
+</Note>
+
+## Examples
+
+### Basic usage without setup
+
+```typescript
+import { entry, type } from "entrykit";
+
+const envSchema = type({
+  PORT: "string",
+  NODE_ENV: "'development' | 'production'"
+});
+
+await entry({
+  name: "my-service",
+  env: envSchema,
+  main: ({ env }) => {
+    console.log(`Starting server on port ${env.PORT}`);
+    console.log(`Environment: ${env.NODE_ENV}`);
+    
+    // Your service logic here
+    
+    // Return cleanup function
+    return () => {
+      console.log("Shutting down gracefully...");
+    };
+  }
+});
+```
+
+### With setup phase
+
+```typescript
+import { entry, type } from "entrykit";
+import { createServer } from "http";
+import { connect } from "mongoose";
+
+const envSchema = type({
+  PORT: "string",
+  MONGODB_URI: "string"
+});
+
+await entry({
+  name: "api-server",
+  env: envSchema,
+  setup: async ({ env }) => {
+    // Initialize database connection
+    const db = await connect(env.MONGODB_URI);
+    console.log("Database connected");
+    
+    return { db };
+  },
+  main: ({ env, extras }) => {
+    const server = createServer((req, res) => {
+      // Use extras.db in your handlers
+      res.writeHead(200);
+      res.end("OK");
+    });
+    
+    server.listen(parseInt(env.PORT));
+    console.log(`Server listening on port ${env.PORT}`);
+    
+    // Return cleanup function
+    return async () => {
+      console.log("Shutting down...");
+      await extras.db.disconnect();
+      server.close();
+    };
+  }
+});
+```
+
+### Without environment validation
+
+```typescript
+import { entry } from "entrykit";
+
+await entry({
+  name: "simple-worker",
+  main: () => {
+    console.log("Worker started");
+    
+    setInterval(() => {
+      console.log("Working...");
+    }, 1000);
+    
+    // No cleanup needed
+  }
+});
+```
+
+### Complex setup with multiple resources
+
+```typescript
+import { entry, type } from "entrykit";
+import { createClient } from "redis";
+import { Pool } from "pg";
+
+const envSchema = type({
+  REDIS_URL: "string",
+  DATABASE_URL: "string",
+  PORT: "string"
+});
+
+await entry({
+  name: "backend-service",
+  env: envSchema,
+  setup: async ({ env }) => {
+    // Initialize multiple resources
+    const redis = createClient({ url: env.REDIS_URL });
+    await redis.connect();
+    
+    const pg = new Pool({ connectionString: env.DATABASE_URL });
+    await pg.query("SELECT 1");
+    
+    return { redis, pg };
+  },
+  main: ({ env, extras }) => {
+    const { redis, pg } = extras;
+    
+    // Your service logic using redis and pg
+    
+    return async () => {
+      console.log("Cleaning up...");
+      await redis.quit();
+      await pg.end();
+    };
+  }
+});
+```

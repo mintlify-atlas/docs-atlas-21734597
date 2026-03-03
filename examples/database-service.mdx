@@ -1,0 +1,385 @@
+---
+title: Service with database setup lifecycle
+description: Build services with async initialization using EntryKit's setup lifecycle hook for database connections and resource management
+---
+
+## Overview
+
+This example demonstrates EntryKit's `setup` lifecycle hook, which enables async initialization before your main service starts. This is essential for establishing database connections, warming caches, or any async resource setup.
+
+## What you'll learn
+
+- How to use the `setup` lifecycle hook for async initialization
+- How to pass setup results to `main` via `extras`
+- How to properly clean up async resources on shutdown
+- Best practices for database connection management
+
+## Example: API server with PostgreSQL
+
+This example shows a realistic API server that connects to PostgreSQL during startup and ensures proper connection cleanup on shutdown.
+
+<Steps>
+  <Step title="Define service with setup lifecycle">
+    ```typescript index.ts
+    import { entry, type } from "entrykit";
+    import express from "express";
+    import pg from "pg";
+
+    entry({
+      name: "user-api",
+      
+      // Validate environment
+      env: type({
+        PORT: "string",
+        DATABASE_URL: "string",
+        DB_POOL_MIN: "number >= 2",
+        DB_POOL_MAX: "number <= 20",
+        NODE_ENV: "'development' | 'production' | 'test'",
+      }),
+      
+      // Async setup runs before main
+      setup: async ({ env }) => {
+        console.log("Connecting to database...");
+        
+        // Create connection pool
+        const pool = new pg.Pool({
+          connectionString: env.DATABASE_URL,
+          min: env.DB_POOL_MIN,
+          max: env.DB_POOL_MAX,
+          idleTimeoutMillis: 30000,
+          connectionTimeoutMillis: 2000,
+        });
+        
+        // Test connection
+        try {
+          const client = await pool.connect();
+          const result = await client.query("SELECT NOW()");
+          console.log("Database connected:", result.rows[0].now);
+          client.release();
+        } catch (error) {
+          console.error("Failed to connect to database:", error);
+          await pool.end();
+          throw error;
+        }
+        
+        // Run migrations (example)
+        await runMigrations(pool);
+        
+        // Return resources for main to use
+        return { pool };
+      },
+      
+      // Main receives setup results in extras
+      main: ({ env, extras }) => {
+        const { pool } = extras;
+        const app = express();
+        
+        app.use(express.json());
+        
+        // Health check with database ping
+        app.get("/health", async (req, res) => {
+          try {
+            const result = await pool.query("SELECT 1");
+            res.json({ 
+              status: "healthy",
+              database: "connected",
+              timestamp: new Date().toISOString()
+            });
+          } catch (error) {
+            res.status(503).json({ 
+              status: "unhealthy",
+              database: "disconnected",
+              error: error.message
+            });
+          }
+        });
+        
+        // Get users endpoint
+        app.get("/api/users", async (req, res) => {
+          try {
+            const result = await pool.query(
+              "SELECT id, email, name, created_at FROM users ORDER BY created_at DESC LIMIT 100"
+            );
+            res.json({ users: result.rows });
+          } catch (error) {
+            console.error("Database query failed:", error);
+            res.status(500).json({ error: "Failed to fetch users" });
+          }
+        });
+        
+        // Create user endpoint
+        app.post("/api/users", async (req, res) => {
+          const { email, name } = req.body;
+          
+          if (!email || !name) {
+            return res.status(400).json({ error: "Email and name required" });
+          }
+          
+          try {
+            const result = await pool.query(
+              "INSERT INTO users (email, name) VALUES ($1, $2) RETURNING id, email, name, created_at",
+              [email, name]
+            );
+            res.status(201).json({ user: result.rows[0] });
+          } catch (error) {
+            console.error("Failed to create user:", error);
+            res.status(500).json({ error: "Failed to create user" });
+          }
+        });
+        
+        // Start HTTP server
+        const server = app.listen(Number(env.PORT), () => {
+          console.log(`API listening on port ${env.PORT}`);
+        });
+        
+        // Graceful shutdown: close server AND database
+        return async () => {
+          console.log("Shutting down gracefully...");
+          
+          // Stop accepting new connections
+          server.close(() => {
+            console.log("HTTP server closed");
+          });
+          
+          // Close database connections
+          await pool.end();
+          console.log("Database connections closed");
+          console.log("Shutdown complete");
+        };
+      },
+    });
+
+    // Helper function for migrations
+    async function runMigrations(pool: pg.Pool): Promise<void> {
+      console.log("Running migrations...");
+      
+      await pool.query(`
+        CREATE TABLE IF NOT EXISTS users (
+          id SERIAL PRIMARY KEY,
+          email VARCHAR(255) UNIQUE NOT NULL,
+          name VARCHAR(255) NOT NULL,
+          created_at TIMESTAMP DEFAULT NOW()
+        )
+      `);
+      
+      console.log("Migrations complete");
+    }
+    ```
+  </Step>
+
+  <Step title="Configure environment">
+    ```bash .env
+    PORT=3000
+    DATABASE_URL=postgresql://user:password@localhost:5432/myapp
+    DB_POOL_MIN=2
+    DB_POOL_MAX=10
+    NODE_ENV=development
+    ```
+  </Step>
+
+  <Step title="Run the service">
+    ```bash
+    # Make sure PostgreSQL is running
+    docker run -d -p 5432:5432 \
+      -e POSTGRES_USER=user \
+      -e POSTGRES_PASSWORD=password \
+      -e POSTGRES_DB=myapp \
+      postgres:16
+
+    # Start the service
+    node -r dotenv/config index.ts
+    ```
+
+    You should see:
+    ```
+    Connecting to database...
+    Database connected: 2024-03-15T10:30:00.000Z
+    Running migrations...
+    Migrations complete
+    API listening on port 3000
+    ```
+  </Step>
+
+  <Step title="Test the API">
+    ```bash
+    # Check health
+    curl http://localhost:3000/health
+
+    # Create a user
+    curl -X POST http://localhost:3000/api/users \
+      -H "Content-Type: application/json" \
+      -d '{"email": "alice@example.com", "name": "Alice"}'
+
+    # Get all users
+    curl http://localhost:3000/api/users
+    ```
+  </Step>
+</Steps>
+
+## How the setup lifecycle works
+
+<CodeGroup>
+```typescript Execution order
+// 1. Environment validation runs first
+const env = validateEnvironment();
+
+// 2. Setup runs and completes
+const extras = await setup({ env });
+
+// 3. Main runs with both env and extras
+const cleanup = await main({ env, extras });
+
+// 4. Cleanup runs on SIGTERM/SIGINT
+await cleanup();
+```
+
+```typescript Type safety
+// Setup's return type is inferred
+setup: async ({ env }) => {
+  const pool = await createPool();
+  return { pool };  // { pool: pg.Pool }
+},
+
+// extras is automatically typed!
+main: ({ env, extras }) => {
+  extras.pool  // TypeScript knows this is pg.Pool
+}
+```
+</CodeGroup>
+
+<Note>
+  If `setup` throws an error, `main` never runs. This ensures your service only starts if all dependencies are healthy.
+</Note>
+
+## Advanced patterns
+
+### Multiple dependencies
+
+```typescript
+setup: async ({ env }) => {
+  const [db, cache, queue] = await Promise.all([
+    connectDatabase(env.DATABASE_URL),
+    connectRedis(env.REDIS_URL),
+    connectRabbitMQ(env.RABBITMQ_URL),
+  ]);
+  
+  return { db, cache, queue };
+},
+```
+
+### Retry logic for connections
+
+```typescript
+setup: async ({ env }) => {
+  let retries = 5;
+  
+  while (retries > 0) {
+    try {
+      const pool = await createPool(env.DATABASE_URL);
+      await pool.query("SELECT 1");
+      return { pool };
+    } catch (error) {
+      retries--;
+      if (retries === 0) throw error;
+      console.log(`Connection failed, retrying... (${retries} left)`);
+      await sleep(2000);
+    }
+  }
+},
+```
+
+### Graceful degradation
+
+```typescript
+setup: async ({ env }) => {
+  const db = await connectDatabase(env.DATABASE_URL);
+  
+  // Cache is optional
+  let cache = null;
+  try {
+    cache = await connectRedis(env.REDIS_URL);
+  } catch (error) {
+    console.warn("Cache unavailable, continuing without it");
+  }
+  
+  return { db, cache };
+},
+
+main: ({ extras }) => {
+  if (extras.cache) {
+    // Use cache if available
+  } else {
+    // Fallback to database only
+  }
+}
+```
+
+## Cleanup best practices
+
+<CardGroup cols={2}>
+  <Card title="Close in reverse order" icon="arrow-down-up-across-line">
+    Close resources in the reverse order they were opened: HTTP server first, then databases/caches.
+  </Card>
+  <Card title="Set timeouts" icon="timer">
+    Don't wait forever. Set timeouts for graceful shutdown (typically 10-30 seconds).
+  </Card>
+  <Card title="Drain connections" icon="plug-circle-xmark">
+    For HTTP servers, stop accepting new requests before closing existing connections.
+  </Card>
+  <Card title="Log everything" icon="file-lines">
+    Log each step of shutdown to debug issues in production.
+  </Card>
+</CardGroup>
+
+<Tip>
+  The cleanup function can be async! EntryKit awaits it, allowing you to properly close database pools, flush buffers, and complete graceful shutdown.
+</Tip>
+
+## Production example with timeouts
+
+```typescript
+main: ({ env, extras }) => {
+  const { pool } = extras;
+  const app = express();
+  
+  // ... route setup ...
+  
+  const server = app.listen(Number(env.PORT));
+  
+  return async () => {
+    console.log("Starting graceful shutdown...");
+    const shutdownTimeout = 30000; // 30 seconds
+    
+    // Race shutdown against timeout
+    await Promise.race([
+      (async () => {
+        // Close server (stops accepting connections)
+        await new Promise((resolve) => server.close(resolve));
+        
+        // Close database pool (waits for active queries)
+        await pool.end();
+        
+        console.log("Graceful shutdown complete");
+      })(),
+      
+      new Promise((_, reject) => 
+        setTimeout(() => reject(new Error("Shutdown timeout")), shutdownTimeout)
+      ),
+    ]).catch((error) => {
+      console.error("Forced shutdown:", error.message);
+      process.exit(1);
+    });
+  };
+}
+```
+
+## Next steps
+
+<CardGroup cols={2}>
+  <Card title="Basic service" href="/examples/basic-service" icon="play">
+    Review the basics of EntryKit
+  </Card>
+  <Card title="API server" href="/examples/api-server" icon="server">
+    Learn about environment validation
+  </Card>
+</CardGroup>

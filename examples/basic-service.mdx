@@ -1,0 +1,108 @@
+---
+title: Basic service example
+description: Learn how to create a simple service with EntryKit, including graceful shutdown handling
+---
+
+## Overview
+
+This example demonstrates the most basic usage of EntryKit: creating a simple service with a clean entrypoint and automatic graceful shutdown handling.
+
+## What you'll learn
+
+- How to define a service entrypoint with `entry()`
+- How to implement graceful shutdown cleanup
+- How EntryKit automatically handles `SIGTERM` and `SIGINT` signals
+
+## Example: Background worker service
+
+This example shows a background worker that processes tasks from a queue every 5 seconds.
+
+<Steps>
+  <Step title="Create the service entrypoint">
+    ```typescript index.ts
+    import { entry } from "entrykit";
+
+    entry({
+      name: "background-worker",
+      main: () => {
+        console.log("Starting background worker...");
+        
+        // Simulate processing tasks periodically
+        const intervalId = setInterval(() => {
+          console.log(`[${new Date().toISOString()}] Processing tasks...`);
+          // Your task processing logic here
+        }, 5000);
+
+        // Return cleanup function for graceful shutdown
+        return () => {
+          console.log("Shutting down worker, cleaning up...");
+          clearInterval(intervalId);
+          console.log("Worker stopped cleanly.");
+        };
+      },
+    });
+    ```
+  </Step>
+
+  <Step title="Run the service">
+    ```bash
+    node index.ts
+    # or with bun
+    bun index.ts
+    ```
+  </Step>
+
+  <Step title="Test graceful shutdown">
+    Press `Ctrl+C` (sends `SIGINT`) or send a `SIGTERM` signal to see the cleanup function execute:
+    
+    ```
+    Starting background worker...
+    [2024-03-15T10:30:00.000Z] Processing tasks...
+    [2024-03-15T10:30:05.000Z] Processing tasks...
+    ^C
+    Shutting down worker, cleaning up...
+    Worker stopped cleanly.
+    ```
+  </Step>
+</Steps>
+
+<Note>
+  The cleanup function returned from `main` is automatically registered to handle both `SIGTERM` and `SIGINT` signals, ensuring your service shuts down gracefully in containers, process managers, or when manually interrupted.
+</Note>
+
+## Key concepts
+
+### Service name
+
+The `name` field identifies your service. While not used by EntryKit internally in this basic example, it's good practice for logging and monitoring.
+
+### Main function
+
+The `main` function is your service's entrypoint. It runs immediately when you call `entry()`.
+
+### Cleanup function
+
+If `main` returns a function, EntryKit automatically:
+- Registers it as a `SIGTERM` handler (for graceful container shutdowns)
+- Registers it as a `SIGINT` handler (for `Ctrl+C` interrupts)
+
+This ensures your service can clean up resources like:
+- Clearing intervals and timeouts
+- Closing file handles
+- Flushing logs
+- Completing in-flight operations
+
+<Tip>
+  Even simple services benefit from graceful shutdown. Always return a cleanup function that releases resources and completes pending work.
+</Tip>
+
+## Next steps
+
+<CardGroup cols={2}>
+  <Card title="API server" href="/examples/api-server" icon="server">
+    Build an HTTP API with environment validation
+  </Card>
+  <Card title="Database service" href="/examples/database-service" icon="database">
+    Add async setup lifecycle for database connections
+  </Card>
+</CardGroup>

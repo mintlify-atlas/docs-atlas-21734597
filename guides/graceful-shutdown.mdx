@@ -1,0 +1,372 @@
+---
+title: Graceful shutdown
+description: Handle cleanup operations properly when your Node.js service receives shutdown signals
+---
+
+Graceful shutdown is critical for production services. EntryKit automatically handles SIGTERM and SIGINT signals, calling your cleanup function to close connections, finish processing, and release resources before the process exits.
+
+## Why graceful shutdown matters
+
+Without proper shutdown handling, your service might:
+
+- Leave database connections open
+- Lose in-flight requests
+- Corrupt data by terminating mid-operation
+- Cause connection leaks in dependent services
+
+<Warning>
+In container orchestration platforms like Kubernetes, services receive SIGTERM before being forcefully killed. Without graceful shutdown, your service will be terminated abruptly.
+</Warning>
+
+## How EntryKit handles shutdown
+
+EntryKit automatically registers your cleanup function for process signals:
+
+```typescript
+if (!cleanup) {
+  return;
+}
+
+process.once("SIGTERM", cleanup);
+process.once("SIGINT", cleanup);
+```
+
+This code from EntryKit's source shows the automatic signal handling. When your process receives SIGTERM (graceful shutdown request) or SIGINT (Ctrl+C), your cleanup function is called.
+
+<Note>
+EntryKit uses `process.once()` to ensure the cleanup function is only called once, even if multiple signals are received.
+</Note>
+
+## Basic cleanup pattern
+
+Return a cleanup function from `main` to handle shutdown:
+
+```typescript
+import { entry, type } from "entrykit";
+import { createServer } from "http";
+
+const envSchema = type({
+  PORT: "string"
+});
+
+await entry({
+  name: "http-service",
+  env: envSchema,
+  main: async ({ env }) => {
+    const server = createServer((req, res) => {
+      res.writeHead(200);
+      res.end("OK");
+    });
+    
+    server.listen(parseInt(env.PORT));
+    console.log(`Server listening on port ${env.PORT}`);
+    
+    // Return cleanup function
+    return () => {
+      console.log("Shutdown signal received");
+      
+      server.close(() => {
+        console.log("Server closed, exiting...");
+        process.exit(0);
+      });
+    };
+  }
+});
+```
+
+## Cleanup with setup dependencies
+
+When using the setup phase, cleanup functions typically need to close resources initialized in `setup`:
+
+```typescript
+import { entry, type } from "entrykit";
+import { Pool } from "pg";
+import { createClient } from "redis";
+
+const envSchema = type({
+  DATABASE_URL: "string",
+  REDIS_URL: "string"
+});
+
+await entry({
+  name: "multi-resource-service",
+  env: envSchema,
+  setup: async ({ env }) => {
+    const db = new Pool({ connectionString: env.DATABASE_URL });
+    const redis = createClient({ url: env.REDIS_URL });
+    await redis.connect();
+    
+    return { db, redis };
+  },
+  main: async ({ extras }) => {
+    console.log("Service started");
+    
+    // Cleanup both resources
+    return async () => {
+      console.log("Shutting down gracefully...");
+      
+      // Close connections in parallel
+      await Promise.all([
+        extras.db.end(),
+        extras.redis.disconnect()
+      ]);
+      
+      console.log("All connections closed");
+      process.exit(0);
+    };
+  }
+});
+```
+
+<Tip>
+Cleanup functions can be synchronous or asynchronous. Use `async` when you need to await closing operations like database disconnections.
+</Tip>
+
+## Complete shutdown example
+
+Here's a production-ready example with proper error handling:
+
+```typescript
+import { entry, type } from "entrykit";
+import express from "express";
+import { Pool } from "pg";
+
+const envSchema = type({
+  PORT: "string",
+  DATABASE_URL: "string"
+});
+
+await entry({
+  name: "api-service",
+  env: envSchema,
+  setup: async ({ env }) => {
+    const pool = new Pool({ connectionString: env.DATABASE_URL });
+    const app = express();
+    
+    app.get("/users", async (req, res) => {
+      try {
+        const result = await pool.query("SELECT * FROM users");
+        res.json(result.rows);
+      } catch (error) {
+        res.status(500).json({ error: "Database error" });
+      }
+    });
+    
+    return { app, pool };
+  },
+  main: async ({ env, extras }) => {
+    const server = extras.app.listen(parseInt(env.PORT));
+    console.log(`API server listening on port ${env.PORT}`);
+    
+    return async () => {
+      console.log("Shutdown initiated...");
+      
+      // Stop accepting new connections
+      server.close(() => {
+        console.log("HTTP server closed");
+      });
+      
+      // Wait for existing connections to complete (with timeout)
+      await new Promise((resolve) => {
+        setTimeout(resolve, 5000);
+      });
+      
+      // Close database connections
+      try {
+        await extras.pool.end();
+        console.log("Database connections closed");
+      } catch (error) {
+        console.error("Error closing database:", error);
+      }
+      
+      console.log("Graceful shutdown complete");
+      process.exit(0);
+    };
+  }
+});
+```
+
+## Handling multiple resources
+
+When cleaning up multiple resources, handle them in the correct order:
+
+<Steps>
+
+<Step title="Stop accepting new work">
+  Close servers and listeners to prevent new requests or connections.
+</Step>
+
+<Step title="Finish in-flight operations">
+  Wait for existing requests or jobs to complete, with a reasonable timeout.
+</Step>
+
+<Step title="Close external connections">
+  Disconnect from databases, caches, message queues, and other external services.
+</Step>
+
+<Step title="Exit the process">
+  Call `process.exit()` to terminate the Node.js process after cleanup is complete.
+</Step>
+
+</Steps>
+
+## Cleanup without return value
+
+If your `main` function doesn't return anything, EntryKit skips cleanup registration:
+
+```typescript
+import { entry } from "entrykit";
+
+await entry({
+  name: "simple-service",
+  main: async () => {
+    console.log("Service started");
+    
+    // No cleanup needed, don't return anything
+  }
+});
+```
+
+<Note>
+This is useful for simple services or scripts that don't require explicit cleanup. The process will exit normally when terminated.
+</Note>
+
+## Testing cleanup behavior
+
+You can test shutdown behavior by sending signals to your process:
+
+```bash
+# Start your service
+node service.js
+
+# In another terminal, send SIGTERM
+kill -TERM <pid>
+
+# Or send SIGINT (same as Ctrl+C)
+kill -INT <pid>
+```
+
+Your cleanup function should execute and log its operations before the process exits.
+
+## Kubernetes shutdown handling
+
+In Kubernetes, pods receive SIGTERM before termination:
+
+```typescript
+import { entry, type } from "entrykit";
+import express from "express";
+
+const envSchema = type({
+  PORT: "string"
+});
+
+await entry({
+  name: "k8s-service",
+  env: envSchema,
+  main: async ({ env }) => {
+    const app = express();
+    
+    // Health check endpoint
+    let isShuttingDown = false;
+    app.get("/health", (req, res) => {
+      if (isShuttingDown) {
+        res.status(503).send("Shutting down");
+      } else {
+        res.status(200).send("OK");
+      }
+    });
+    
+    const server = app.listen(parseInt(env.PORT));
+    console.log(`Service ready on port ${env.PORT}`);
+    
+    return async () => {
+      isShuttingDown = true;
+      console.log("SIGTERM received, starting graceful shutdown");
+      
+      // Stop accepting new connections
+      server.close();
+      
+      // Wait for in-flight requests (K8s gives 30s by default)
+      await new Promise(resolve => setTimeout(resolve, 5000));
+      
+      console.log("Graceful shutdown complete");
+      process.exit(0);
+    };
+  }
+});
+```
+
+<Warning>
+Kubernetes has a grace period (default 30 seconds) before forcefully killing the pod. Ensure your cleanup completes within this window.
+</Warning>
+
+## Error handling in cleanup
+
+Always handle errors in cleanup to ensure your service exits even if cleanup fails:
+
+```typescript
+import { entry, type } from "entrykit";
+import { Pool } from "pg";
+
+const envSchema = type({
+  DATABASE_URL: "string"
+});
+
+await entry({
+  name: "error-safe-cleanup",
+  env: envSchema,
+  setup: async ({ env }) => {
+    const pool = new Pool({ connectionString: env.DATABASE_URL });
+    return { pool };
+  },
+  main: async ({ extras }) => {
+    console.log("Service started");
+    
+    return async () => {
+      console.log("Cleaning up...");
+      
+      try {
+        await extras.pool.end();
+        console.log("Database closed successfully");
+      } catch (error) {
+        console.error("Error during cleanup:", error);
+        // Continue cleanup even if this fails
+      }
+      
+      // Always exit
+      process.exit(0);
+    };
+  }
+});
+```
+
+## Best practices
+
+<Steps>
+
+<Step title="Always return a cleanup function">
+  Even simple services should clean up properly. Return a cleanup function from `main` to handle shutdown signals.
+</Step>
+
+<Step title="Handle cleanup errors">
+  Wrap cleanup operations in try-catch blocks to ensure the process exits even if individual operations fail.
+</Step>
+
+<Step title="Set reasonable timeouts">
+  Don't let cleanup run indefinitely. Use timeouts to ensure your service exits within orchestration grace periods.
+</Step>
+
+<Step title="Test shutdown behavior">
+  Regularly test your cleanup by sending SIGTERM signals and verifying that resources are properly released.
+</Step>
+
+<Step title="Log cleanup steps">
+  Add logging to your cleanup function to help debug shutdown issues in production.
+</Step>
+
+</Steps>
+
+## What's next?
+
+- [Setup lifecycle](/guides/setup-lifecycle) - Learn how to initialize resources that need cleanup
+- [Basic usage](/guides/basic-usage) - Understand EntryKit fundamentals

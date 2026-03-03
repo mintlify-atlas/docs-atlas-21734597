@@ -1,0 +1,223 @@
+---
+title: Type definitions
+description: TypeScript interfaces and types for EntryKit
+---
+
+## Overview
+
+EntryKit provides several TypeScript types and interfaces for building type-safe service entrypoints.
+
+## Interfaces
+
+### WithSetup
+
+Interface for `entry()` options when using a setup phase.
+
+```typescript
+interface WithSetup<EnvType extends Type, SetupResult> {
+  name: string;
+  env?: EnvType;
+  setup: (options: { env: EnvType["inferOut"] }) => MaybePromise<SetupResult>;
+  main: (options: {
+    env: EnvType["inferOut"];
+    extras: Awaited<SetupResult>;
+  }) => MaybePromise<MaybeCleanupFunction>;
+}
+```
+
+<Expandable title="Type parameters">
+  <ResponseField name="EnvType" type="extends Type">
+    An arktype schema type for environment variable validation.
+  </ResponseField>
+  
+  <ResponseField name="SetupResult" type="any">
+    The type of value returned by the `setup` function. This will be passed to `main` as `extras`.
+  </ResponseField>
+</Expandable>
+
+<Expandable title="Properties">
+  <ResponseField name="name" type="string" required>
+    The name of your service.
+  </ResponseField>
+  
+  <ResponseField name="env" type="EnvType">
+    Optional arktype schema for environment validation.
+  </ResponseField>
+  
+  <ResponseField name="setup" type="(options: { env: EnvType['inferOut'] }) => MaybePromise<SetupResult>" required>
+    Function that runs before `main` to initialize resources. Can be sync or async.
+    
+    - Receives validated environment variables as `env`
+    - Returns a value (or Promise) passed to `main` as `extras`
+  </ResponseField>
+  
+  <ResponseField name="main" type="(options: { env: EnvType['inferOut']; extras: Awaited<SetupResult> }) => MaybePromise<MaybeCleanupFunction>" required>
+    Main service function. Can be sync or async.
+    
+    - Receives validated environment variables as `env`
+    - Receives setup result as `extras`
+    - Optionally returns a cleanup function
+  </ResponseField>
+</Expandable>
+
+### WithoutSetup
+
+Interface for `entry()` options when not using a setup phase.
+
+```typescript
+interface WithoutSetup<EnvType extends Type> {
+  name: string;
+  env?: EnvType;
+  main: (options: {
+    env: EnvType["inferOut"];
+  }) => MaybePromise<MaybeCleanupFunction>;
+}
+```
+
+<Expandable title="Type parameters">
+  <ResponseField name="EnvType" type="extends Type">
+    An arktype schema type for environment variable validation.
+  </ResponseField>
+</Expandable>
+
+<Expandable title="Properties">
+  <ResponseField name="name" type="string" required>
+    The name of your service.
+  </ResponseField>
+  
+  <ResponseField name="env" type="EnvType">
+    Optional arktype schema for environment validation.
+  </ResponseField>
+  
+  <ResponseField name="main" type="(options: { env: EnvType['inferOut'] }) => MaybePromise<MaybeCleanupFunction>" required>
+    Main service function. Can be sync or async.
+    
+    - Receives validated environment variables as `env`
+    - Optionally returns a cleanup function
+  </ResponseField>
+</Expandable>
+
+## Type aliases
+
+### MaybeCleanupFunction
+
+Type for the optional cleanup function returned by `main`.
+
+```typescript
+type MaybeCleanupFunction = (() => void) | undefined;
+```
+
+This represents a function with no parameters that returns void, or `undefined` if no cleanup is needed.
+
+<Note>
+  The cleanup function must be synchronous. If you need async cleanup, await your async operations inside a sync wrapper.
+</Note>
+
+#### Example
+
+```typescript
+// Valid cleanup function
+const cleanup: MaybeCleanupFunction = () => {
+  console.log("Cleaning up...");
+  server.close();
+};
+
+// No cleanup needed
+const noCleanup: MaybeCleanupFunction = undefined;
+
+// Async cleanup (wrapped in sync function)
+const asyncCleanup: MaybeCleanupFunction = () => {
+  // Fire and forget, or use void
+  void (async () => {
+    await db.disconnect();
+  })();
+};
+```
+
+## Re-exported types
+
+### type
+
+EntryKit re-exports the `type` function from arktype for convenience, so you don't need arktype as a peer dependency.
+
+```typescript
+export { type } from "arktype";
+```
+
+This allows you to create environment schemas directly:
+
+```typescript
+import { entry, type } from "entrykit";
+
+const envSchema = type({
+  PORT: "string",
+  NODE_ENV: "'development' | 'production'"
+});
+```
+
+For full documentation on arktype's `type` function, see the [arktype documentation](https://arktype.io).
+
+## Helper types
+
+### MaybePromise
+
+While not exported directly, EntryKit uses `MaybePromise<T>` from Bun's type definitions internally. This type represents a value that may or may not be a Promise:
+
+```typescript
+type MaybePromise<T> = T | Promise<T>;
+```
+
+This is why your `setup` and `main` functions can be either synchronous or asynchronous - EntryKit handles both cases automatically.
+
+## Type inference
+
+### Environment type inference
+
+When you provide an `env` schema, the validated environment is automatically typed:
+
+```typescript
+import { entry, type } from "entrykit";
+
+const envSchema = type({
+  PORT: "string",
+  TIMEOUT: "number"
+});
+
+await entry({
+  name: "example",
+  env: envSchema,
+  main: ({ env }) => {
+    // env is typed as { PORT: string; TIMEOUT: number }
+    const port: string = env.PORT;
+    const timeout: number = env.TIMEOUT;
+  }
+});
+```
+
+### Setup result inference
+
+The type of your `setup` return value is automatically inferred and passed to `main`:
+
+```typescript
+import { entry, type } from "entrykit";
+
+const envSchema = type({
+  DB_URL: "string"
+});
+
+await entry({
+  name: "example",
+  env: envSchema,
+  setup: async ({ env }) => {
+    const connection = await connect(env.DB_URL);
+    const cache = new Map();
+    
+    return { connection, cache };
+  },
+  main: ({ extras }) => {
+    // extras is typed as { connection: Connection; cache: Map<any, any> }
+    extras.connection.query("SELECT 1");
+    extras.cache.set("key", "value");
+  }
+});
+```

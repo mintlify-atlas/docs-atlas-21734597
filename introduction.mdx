@@ -1,0 +1,104 @@
+---
+title: Introduction
+description: Structured entrypoints for Node.js services with type-safe environment validation and graceful shutdown handling
+---
+
+# EntryKit
+
+A tiny TypeScript library for defining service entrypoints with validated environment variables, setup/teardown lifecycle hooks, and graceful shutdown handling. Built on [ArkType](https://github.com/arktypeio/arktype) for runtime type-safe environment parsing.
+
+<CardGroup cols={2}>
+  <Card title="Installation" icon="download" href="/installation">
+    Install EntryKit with your preferred package manager
+  </Card>
+  <Card title="Quick start" icon="rocket" href="/quickstart">
+    Get started with a working example in minutes
+  </Card>
+  <Card title="GitHub" icon="github" href="https://github.com/ridafkih/entrykit">
+    View source code and contribute
+  </Card>
+  <Card title="npm" icon="box" href="https://www.npmjs.com/package/entrykit">
+    View package on npm registry
+  </Card>
+</CardGroup>
+
+## Why EntryKit?
+
+Building production Node.js services requires handling common concerns: environment variable validation, graceful shutdown, and initialization lifecycle. EntryKit provides a minimal, type-safe API to handle these patterns consistently.
+
+## Key features
+
+<CardGroup cols={2}>
+  <Card title="Type-safe environment validation" icon="shield-check">
+    Validate environment variables at startup with ArkType schemas. Get runtime type safety and automatic TypeScript inference.
+  </Card>
+  <Card title="Async setup lifecycle" icon="gear">
+    Optional setup phase for database connections, cache warming, and dependency injection. Results are type-safely passed to your main function.
+  </Card>
+  <Card title="Graceful shutdown" icon="power-off">
+    Automatic SIGTERM and SIGINT handling. Return a cleanup function from main to handle teardown logic.
+  </Card>
+  <Card title="Minimal API surface" icon="code">
+    Just one function to learn. TypeScript-first design with full type inference and no runtime overhead.
+  </Card>
+</CardGroup>
+
+## How it works
+
+EntryKit provides a single `entry()` function that orchestrates your service lifecycle:
+
+<Steps>
+  <Step title="Validate environment">
+    If you provide an `env` schema, EntryKit validates `process.env` using ArkType before proceeding. Invalid variables throw immediately.
+  </Step>
+  <Step title="Run setup (optional)">
+    If you provide a `setup` function, it runs asynchronously with access to validated environment variables. Perfect for database connections or cache warming.
+  </Step>
+  <Step title="Execute main">
+    Your `main` function runs with validated environment and setup results. It can optionally return a cleanup function.
+  </Step>
+  <Step title="Register shutdown handlers">
+    If `main` returns a cleanup function, EntryKit automatically registers it for SIGTERM and SIGINT signals.
+  </Step>
+</Steps>
+
+## Simple example
+
+Here's a basic service with environment validation and graceful shutdown:
+
+```typescript
+import { entry, type } from "entrykit";
+
+entry({
+  name: "my-service",
+  env: type({
+    PORT: "string",
+    DATABASE_URL: "string",
+  }),
+  main: ({ env }) => {
+    console.log(`Starting service on port ${env.PORT}`);
+    console.log(`Connecting to ${env.DATABASE_URL}`);
+    
+    return () => {
+      console.log("Shutting down gracefully");
+    };
+  },
+});
+```
+
+<Note>
+The `type` function is re-exported from ArkType, so you don't need to install it as a separate dependency.
+</Note>
+
+## TypeScript-first design
+
+EntryKit is built with TypeScript and provides full type inference:
+
+- Environment variables are automatically typed based on your schema
+- Setup function results are inferred and passed to main
+- Return types are validated at compile time
+- Zero runtime overhead for type safety
+
+<Tip>
+Check out the [quick start guide](/quickstart) to see a complete working example with database connections and HTTP servers.
+</Tip>

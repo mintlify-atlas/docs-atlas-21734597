@@ -1,0 +1,238 @@
+---
+title: Environment validation
+description: Use ArkType to validate and type-check environment variables in your Node.js services
+---
+
+EntryKit integrates with [ArkType](https://arktype.io) to provide runtime validation and type inference for environment variables. This ensures your service has the correct configuration before starting.
+
+## Why validate environment variables?
+
+Environment variables are stringly-typed by default and can contain invalid values. Validating them at startup prevents runtime errors and provides clear error messages when configuration is incorrect.
+
+<Warning>
+Without validation, your service might start with invalid configuration and fail later in unexpected ways. EntryKit catches these issues immediately at startup.
+</Warning>
+
+## Defining environment schema
+
+Use the `type` function from EntryKit (re-exported from ArkType) to define your environment schema:
+
+```typescript
+import { entry, type } from "entrykit";
+
+const envSchema = type({
+  PORT: "string",
+  DATABASE_URL: "string",
+  LOG_LEVEL: "'debug' | 'info' | 'warn' | 'error'"
+});
+
+await entry({
+  name: "my-service",
+  env: envSchema,
+  main: async ({ env }) => {
+    // env is fully typed and validated
+    console.log(`Starting server on port ${env.PORT}`);
+    console.log(`Log level: ${env.LOG_LEVEL}`);
+  }
+});
+```
+
+<Note>
+EntryKit automatically calls `assert` on your schema with `process.env`, validating environment variables before your `main` function runs.
+</Note>
+
+## How validation works
+
+The validation flow in EntryKit is straightforward:
+
+<Steps>
+
+<Step title="Schema assertion">
+  EntryKit calls `.assert(process.env)` on your environment schema, which validates that all environment variables match the defined types.
+</Step>
+
+<Step title="Validation success">
+  If validation passes, the typed environment object is passed to your `setup` and `main` functions.
+</Step>
+
+<Step title="Validation failure">
+  If validation fails, ArkType throws an error with detailed information about what's wrong, and your service won't start.
+</Step>
+
+</Steps>
+
+Here's the actual validation code from EntryKit's source:
+
+```typescript
+const env = options.env?.assert(process.env);
+```
+
+## Type inference
+
+The environment type is automatically inferred from your schema using ArkType's `inferOut` type:
+
+```typescript
+import { entry, type } from "entrykit";
+
+const envSchema = type({
+  PORT: "string",
+  MAX_CONNECTIONS: "string",
+  ENABLE_METRICS: "boolean"
+});
+
+await entry({
+  name: "typed-service",
+  env: envSchema,
+  main: async ({ env }) => {
+    // TypeScript knows the exact type:
+    // env.PORT: string
+    // env.MAX_CONNECTIONS: string
+    // env.ENABLE_METRICS: boolean
+    
+    const port = parseInt(env.PORT);
+    const maxConn = parseInt(env.MAX_CONNECTIONS);
+    
+    if (env.ENABLE_METRICS) {
+      console.log("Metrics enabled");
+    }
+  }
+});
+```
+
+<Tip>
+ArkType's type inference provides full IDE autocomplete and compile-time type checking for your environment variables.
+</Tip>
+
+## Advanced schema patterns
+
+ArkType supports complex validation patterns:
+
+<CodeGroup>
+
+```typescript Union types
+import { entry, type } from "entrykit";
+
+const envSchema = type({
+  NODE_ENV: "'development' | 'staging' | 'production'",
+  LOG_FORMAT: "'json' | 'text'"
+});
+
+await entry({
+  name: "service",
+  env: envSchema,
+  main: async ({ env }) => {
+    // env.NODE_ENV is constrained to specific values
+    if (env.NODE_ENV === "production") {
+      console.log("Running in production mode");
+    }
+  }
+});
+```
+
+```typescript Numeric validation
+import { entry, type } from "entrykit";
+
+const envSchema = type({
+  PORT: "string",
+  TIMEOUT_MS: "string",
+  MAX_RETRIES: "string"
+});
+
+await entry({
+  name: "service",
+  env: envSchema,
+  main: async ({ env }) => {
+    const port = parseInt(env.PORT);
+    const timeout = parseInt(env.TIMEOUT_MS);
+    const retries = parseInt(env.MAX_RETRIES);
+    
+    console.log(`Port: ${port}, Timeout: ${timeout}ms, Retries: ${retries}`);
+  }
+});
+```
+
+```typescript Optional fields
+import { entry, type } from "entrykit";
+
+const envSchema = type({
+  DATABASE_URL: "string",
+  "REDIS_URL?": "string",
+  "DEBUG?": "boolean"
+});
+
+await entry({
+  name: "service",
+  env: envSchema,
+  main: async ({ env }) => {
+    console.log(`Database: ${env.DATABASE_URL}`);
+    
+    if (env.REDIS_URL) {
+      console.log(`Redis: ${env.REDIS_URL}`);
+    }
+    
+    if (env.DEBUG) {
+      console.log("Debug mode enabled");
+    }
+  }
+});
+```
+
+</CodeGroup>
+
+## Working without environment validation
+
+The `env` parameter is optional. If you don't need environment validation, simply omit it:
+
+```typescript
+import { entry } from "entrykit";
+
+await entry({
+  name: "simple-service",
+  main: async ({ env }) => {
+    // env is undefined since no schema was provided
+    // Access process.env directly if needed
+    const port = process.env.PORT || "3000";
+  }
+});
+```
+
+<Warning>
+When you omit the `env` schema, you lose type safety and validation. The `env` parameter in your functions will be `undefined`.
+</Warning>
+
+## Handling validation errors
+
+When environment validation fails, ArkType throws descriptive errors:
+
+```bash
+# Missing required variable
+ArkTypeError: PORT must be a string (was undefined)
+
+# Invalid type
+ArkTypeError: LOG_LEVEL must be 'debug' | 'info' | 'warn' | 'error' (was 'trace')
+```
+
+These errors prevent your service from starting with invalid configuration, making it fail fast with clear feedback.
+
+## Best practices
+
+<Steps>
+
+<Step title="Validate all required variables">
+  Define every environment variable your service needs in the schema to catch configuration issues early.
+</Step>
+
+<Step title="Use specific types">
+  Instead of accepting any string, use union types to constrain values to valid options (e.g., `'debug' | 'info' | 'warn' | 'error'` for log levels).
+</Step>
+
+<Step title="Document your schema">
+  Your environment schema serves as documentation for what configuration your service requires.
+</Step>
+
+</Steps>
+
+## What's next?
+
+- [Setup lifecycle](/guides/setup-lifecycle) - Initialize dependencies before your main application logic
+- [Basic usage](/guides/basic-usage) - Learn the fundamentals of EntryKit

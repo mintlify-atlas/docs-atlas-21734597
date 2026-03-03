@@ -1,0 +1,74 @@
+---
+title: Installation
+description: Install EntryKit using your preferred Node.js package manager
+---
+
+# Installation
+
+EntryKit is available on npm and can be installed using any Node.js package manager.
+
+## Package managers
+
+Choose your preferred package manager:
+
+<CodeGroup>
+
+```bash bun
+bun add entrykit
+```
+
+```bash pnpm
+pnpm add entrykit
+```
+
+```bash yarn
+yarn add entrykit
+```
+
+```bash npm
+npm install entrykit
+```
+
+</CodeGroup>
+
+## Requirements
+
+EntryKit requires:
+
+- Node.js 16 or later
+- TypeScript 5.0 or later (for TypeScript projects)
+
+<Note>
+EntryKit works with both JavaScript and TypeScript projects, but the type-safe environment validation features are most valuable in TypeScript.
+</Note>
+
+## Dependencies
+
+EntryKit has only one runtime dependency:
+
+- **arktype** - Runtime type validation and inference
+
+The `type` function is re-exported from EntryKit, so you don't need to install ArkType separately unless you want to use it elsewhere in your project.
+
+## Verify installation
+
+After installation, verify that EntryKit is working correctly:
+
+```typescript
+import { entry } from "entrykit";
+
+console.log("EntryKit installed successfully!");
+```
+
+If this imports without errors, you're ready to go.
+
+## Next steps
+
+<CardGroup cols={2}>
+  <Card title="Quick start" icon="rocket" href="/quickstart">
+    Build your first service entrypoint
+  </Card>
+  <Card title="Introduction" icon="book" href="/introduction">
+    Learn about EntryKit's features
+  </Card>
+</CardGroup>

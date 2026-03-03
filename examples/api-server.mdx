@@ -1,0 +1,219 @@
+---
+title: API server with environment validation
+description: Build a production-ready API server with validated environment variables using EntryKit and ArkType
+---
+
+## Overview
+
+This example demonstrates how to build an HTTP API server with runtime environment variable validation, ensuring your service fails fast if required configuration is missing or invalid.
+
+## What you'll learn
+
+- How to validate environment variables with ArkType schemas
+- How to access type-safe environment variables in your service
+- How to handle graceful shutdown for HTTP servers
+- Best practices for environment configuration
+
+## Example: Express API server
+
+This example shows a realistic Express.js API server with comprehensive environment validation.
+
+<Steps>
+  <Step title="Define environment schema">
+    Create your service with a strongly-typed environment schema:
+
+    ```typescript index.ts
+    import { entry, type } from "entrykit";
+    import express from "express";
+
+    entry({
+      name: "api-server",
+      env: type({
+        // Server configuration
+        PORT: "string",
+        NODE_ENV: "'development' | 'production' | 'test'",
+        
+        // API keys
+        API_SECRET: "string",
+        
+        // External services
+        REDIS_URL: "string",
+        
+        // Optional feature flags with defaults
+        "ENABLE_METRICS?": "boolean = false",
+        "LOG_LEVEL?": "'debug' | 'info' | 'warn' | 'error' = 'info'",
+      }),
+      main: ({ env }) => {
+        const app = express();
+        
+        // Middleware
+        app.use(express.json());
+        
+        // Health check endpoint
+        app.get("/health", (req, res) => {
+          res.json({ 
+            status: "healthy",
+            environment: env.NODE_ENV,
+            timestamp: new Date().toISOString()
+          });
+        });
+        
+        // Protected API endpoint
+        app.post("/api/data", (req, res) => {
+          const authHeader = req.headers.authorization;
+          
+          if (authHeader !== `Bearer ${env.API_SECRET}`) {
+            return res.status(401).json({ error: "Unauthorized" });
+          }
+          
+          // Your business logic here
+          res.json({ success: true, data: req.body });
+        });
+        
+        // Start server
+        const server = app.listen(Number(env.PORT), () => {
+          console.log(`API server listening on port ${env.PORT}`);
+          console.log(`Environment: ${env.NODE_ENV}`);
+          console.log(`Metrics enabled: ${env.ENABLE_METRICS}`);
+        });
+        
+        // Graceful shutdown
+        return () => {
+          console.log("Shutting down API server...");
+          server.close(() => {
+            console.log("Server closed. All connections terminated.");
+          });
+        };
+      },
+    });
+    ```
+  </Step>
+
+  <Step title="Create environment file">
+    Create a `.env` file for local development:
+
+    ```bash .env
+    PORT=3000
+    NODE_ENV=development
+    API_SECRET=your-secret-key-here
+    REDIS_URL=redis://localhost:6379
+    ENABLE_METRICS=true
+    LOG_LEVEL=debug
+    ```
+
+    <Note>
+      Load environment variables before starting your service. Use a package like `dotenv` for local development:
+      
+      ```bash
+      npm install dotenv
+      node -r dotenv/config index.ts
+      ```
+    </Note>
+  </Step>
+
+  <Step title="Run and test the server">
+    Start the server:
+
+    ```bash
+    node -r dotenv/config index.ts
+    ```
+
+    Test the endpoints:
+
+    ```bash
+    # Health check
+    curl http://localhost:3000/health
+
+    # Protected endpoint (with auth)
+    curl -X POST http://localhost:3000/api/data \
+      -H "Authorization: Bearer your-secret-key-here" \
+      -H "Content-Type: application/json" \
+      -d '{"message": "Hello, world!"}'
+
+    # Should fail without auth
+    curl -X POST http://localhost:3000/api/data \
+      -H "Content-Type: application/json" \
+      -d '{"message": "Hello, world!"}'
+    ```
+  </Step>
+</Steps>
+
+## Environment validation in action
+
+### What happens with missing variables
+
+If you try to start the service without required environment variables, ArkType throws an error before `main` runs:
+
+```bash
+# Missing PORT variable
+PORT must be a string (was missing)
+```
+
+### What happens with invalid types
+
+If environment variables don't match the schema, you get clear error messages:
+
+```bash
+# Invalid NODE_ENV value
+NODE_ENV must be "development", "production", or "test" (was "staging")
+```
+
+<Tip>
+  EntryKit validates your environment at startup, implementing the **fail-fast** principle. This prevents runtime errors from misconfiguration and makes debugging easier.
+</Tip>
+
+## Advanced environment patterns
+
+### Numeric values with validation
+
+```typescript
+env: type({
+  PORT: "1024 <= number <= 65535",
+  MAX_CONNECTIONS: "number > 0",
+  TIMEOUT_MS: "number >= 1000",
+}),
+```
+
+### URL validation
+
+```typescript
+env: type({
+  DATABASE_URL: /^postgres:\/\/.+/.pipe((url) => {
+    // Custom validation logic
+    return new URL(url);
+  }),
+}),
+```
+
+### Complex nested configuration
+
+```typescript
+env: type({
+  FEATURE_FLAGS: "string".pipe((flags) => {
+    return JSON.parse(flags) as Record<string, boolean>;
+  }),
+}),
+```
+
+## Production considerations
+
+<CardGroup cols={2}>
+  <Card title="Never log secrets" icon="eye-slash">
+    Avoid logging `API_SECRET` or other sensitive values. Use structured logging with sanitization.
+  </Card>
+  <Card title="Use connection pooling" icon="arrows-rotate">
+    For services like Redis/databases, use connection pools and validate URLs at startup.
+  </Card>
+  <Card title="Set timeouts" icon="clock">
+    Configure `server.setTimeout()` and `server.keepAliveTimeout` for production resilience.
+  </Card>
+  <Card title="Handle errors" icon="triangle-exclamation">
+    Add global error handlers for uncaught exceptions and unhandled rejections.
+  </Card>
+</CardGroup>
+
+## Next steps
+
+<Card title="Database service" href="/examples/database-service" icon="database">
+  Learn how to use the `setup` lifecycle hook for async initialization like database connections
+</Card>

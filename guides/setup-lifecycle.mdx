@@ -1,0 +1,375 @@
+---
+title: Setup lifecycle
+description: Use the setup phase to initialize dependencies and pass them to your main application logic
+---
+
+EntryKit provides a two-phase lifecycle: `setup` and `main`. The setup phase runs first, allowing you to initialize dependencies, connect to databases, or perform any required bootstrapping before your main application logic starts.
+
+## Why use setup?
+
+Separating initialization from application logic provides several benefits:
+
+- **Dependency injection**: Initialize resources once and pass them to your main logic
+- **Clear separation**: Keep bootstrap code separate from application code
+- **Type safety**: The return value from `setup` is typed and passed to `main`
+- **Testability**: Setup and main logic can be tested independently
+
+## Basic setup pattern
+
+Add a `setup` function to your entrypoint configuration:
+
+```typescript
+import { entry, type } from "entrykit";
+import { createClient } from "redis";
+
+const envSchema = type({
+  REDIS_URL: "string"
+});
+
+await entry({
+  name: "redis-service",
+  env: envSchema,
+  setup: async ({ env }) => {
+    // Initialize dependencies
+    const redis = createClient({ url: env.REDIS_URL });
+    await redis.connect();
+    
+    console.log("Redis connected");
+    
+    // Return initialized dependencies
+    return { redis };
+  },
+  main: async ({ env, extras }) => {
+    // Access the redis client from setup
+    await extras.redis.set("status", "running");
+    console.log("Service started with Redis");
+    
+    return () => {
+      extras.redis.disconnect();
+    };
+  }
+});
+```
+
+<Note>
+The `setup` function runs before `main`, and its return value is available as `extras` in the `main` function.
+</Note>
+
+## How the lifecycle works
+
+EntryKit's lifecycle is implemented with a simple but powerful flow:
+
+<Steps>
+
+<Step title="Environment validation">
+  If an `env` schema is provided, EntryKit validates `process.env` against it.
+</Step>
+
+<Step title="Setup phase">
+  If a `setup` function exists, it's called with the validated environment. The return value is awaited if it's a Promise.
+</Step>
+
+<Step title="Main phase">
+  The `main` function is called with both the validated environment and the result from `setup` (as `extras`).
+</Step>
+
+<Step title="Cleanup registration">
+  If `main` returns a cleanup function, it's registered for SIGTERM and SIGINT signals.
+</Step>
+
+</Steps>
+
+Here's the actual lifecycle code from EntryKit's source:
+
+```typescript
+const env = options.env?.assert(process.env);
+
+const cleanup =
+  "setup" in options
+    ? await options.main({ env, extras: await options.setup({ env }) })
+    : await options.main({ env });
+
+if (!cleanup) {
+  return;
+}
+
+process.once("SIGTERM", cleanup);
+process.once("SIGINT", cleanup);
+```
+
+## Type inference for extras
+
+The return type of `setup` is automatically inferred and used to type the `extras` parameter in `main`:
+
+```typescript
+import { entry, type } from "entrykit";
+import { Pool } from "pg";
+import { createClient } from "redis";
+
+const envSchema = type({
+  DATABASE_URL: "string",
+  REDIS_URL: "string"
+});
+
+await entry({
+  name: "multi-service",
+  env: envSchema,
+  setup: async ({ env }) => {
+    const db = new Pool({ connectionString: env.DATABASE_URL });
+    const redis = createClient({ url: env.REDIS_URL });
+    await redis.connect();
+    
+    return { db, redis };
+  },
+  main: async ({ env, extras }) => {
+    // TypeScript knows:
+    // extras.db: Pool
+    // extras.redis: RedisClient
+    
+    const result = await extras.db.query("SELECT NOW()");
+    await extras.redis.set("last_start", result.rows[0].now);
+    
+    console.log("Services initialized");
+    
+    return async () => {
+      await extras.db.end();
+      await extras.redis.disconnect();
+    };
+  }
+});
+```
+
+<Tip>
+The generic type `SetupResult` in EntryKit's TypeScript signature automatically infers the return type of your `setup` function, providing full type safety.
+</Tip>
+
+## Practical examples
+
+<CodeGroup>
+
+```typescript Database connection
+import { entry, type } from "entrykit";
+import { Pool } from "pg";
+
+const envSchema = type({
+  DATABASE_URL: "string"
+});
+
+await entry({
+  name: "db-service",
+  env: envSchema,
+  setup: async ({ env }) => {
+    const pool = new Pool({
+      connectionString: env.DATABASE_URL
+    });
+    
+    // Test the connection
+    await pool.query("SELECT 1");
+    console.log("Database connected");
+    
+    return { pool };
+  },
+  main: async ({ extras }) => {
+    // Use the pool in your application
+    const result = await extras.pool.query(
+      "SELECT * FROM users WHERE active = true"
+    );
+    
+    console.log(`Found ${result.rows.length} active users`);
+    
+    return async () => {
+      await extras.pool.end();
+    };
+  }
+});
+```
+
+```typescript HTTP server with dependencies
+import { entry, type } from "entrykit";
+import express from "express";
+import { createClient } from "redis";
+
+const envSchema = type({
+  PORT: "string",
+  REDIS_URL: "string"
+});
+
+await entry({
+  name: "api-server",
+  env: envSchema,
+  setup: async ({ env }) => {
+    const redis = createClient({ url: env.REDIS_URL });
+    await redis.connect();
+    
+    const app = express();
+    
+    app.get("/health", async (req, res) => {
+      const status = await redis.get("service:status");
+      res.json({ status: status || "unknown" });
+    });
+    
+    return { app, redis };
+  },
+  main: async ({ env, extras }) => {
+    await extras.redis.set("service:status", "healthy");
+    
+    const server = extras.app.listen(parseInt(env.PORT));
+    console.log(`Server listening on port ${env.PORT}`);
+    
+    return () => {
+      server.close();
+      extras.redis.disconnect();
+    };
+  }
+});
+```
+
+```typescript Configuration loading
+import { entry, type } from "entrykit";
+import { readFile } from "fs/promises";
+
+const envSchema = type({
+  CONFIG_PATH: "string"
+});
+
+interface AppConfig {
+  features: string[];
+  limits: { maxRequests: number };
+}
+
+await entry({
+  name: "config-service",
+  env: envSchema,
+  setup: async ({ env }) => {
+    // Load and parse configuration
+    const configData = await readFile(env.CONFIG_PATH, "utf-8");
+    const config: AppConfig = JSON.parse(configData);
+    
+    console.log(`Loaded config with ${config.features.length} features`);
+    
+    return { config };
+  },
+  main: async ({ extras }) => {
+    const { config } = extras;
+    
+    console.log("Enabled features:", config.features);
+    console.log("Max requests:", config.limits.maxRequests);
+    
+    // Start your service with the loaded config
+  }
+});
+```
+
+</CodeGroup>
+
+## Setup without environment
+
+You can use `setup` even without environment validation:
+
+```typescript
+import { entry } from "entrykit";
+
+await entry({
+  name: "simple-setup",
+  setup: async () => {
+    // Initialize something without needing env
+    const startTime = Date.now();
+    
+    return { startTime };
+  },
+  main: async ({ extras }) => {
+    console.log(`Started at ${new Date(extras.startTime).toISOString()}`);
+  }
+});
+```
+
+<Note>
+When you don't provide an `env` schema, the `env` parameter in both `setup` and `main` will be `undefined`.
+</Note>
+
+## Entrypoint without setup
+
+If you don't need a setup phase, simply omit the `setup` function. The `main` function won't receive an `extras` parameter:
+
+```typescript
+import { entry, type } from "entrykit";
+
+const envSchema = type({
+  PORT: "string"
+});
+
+await entry({
+  name: "no-setup-service",
+  env: envSchema,
+  main: async ({ env }) => {
+    // No extras parameter when setup is omitted
+    console.log(`Starting on port ${env.PORT}`);
+  }
+});
+```
+
+## Error handling in setup
+
+If an error occurs during setup, it will propagate and prevent your service from starting:
+
+```typescript
+import { entry, type } from "entrykit";
+import { Pool } from "pg";
+
+const envSchema = type({
+  DATABASE_URL: "string"
+});
+
+try {
+  await entry({
+    name: "db-service",
+    env: envSchema,
+    setup: async ({ env }) => {
+      const pool = new Pool({ connectionString: env.DATABASE_URL });
+      
+      // This might throw if connection fails
+      await pool.query("SELECT 1");
+      
+      return { pool };
+    },
+    main: async ({ extras }) => {
+      // This won't run if setup fails
+      console.log("Service started");
+    }
+  });
+} catch (error) {
+  console.error("Failed to start service:", error);
+  process.exit(1);
+}
+```
+
+<Warning>
+Setup failures should be fatal. If your service can't initialize required dependencies, it shouldn't start.
+</Warning>
+
+## Best practices
+
+<Steps>
+
+<Step title="Initialize expensive resources once">
+  Use `setup` for database connections, cache clients, and other resources that should be created once and reused.
+</Step>
+
+<Step title="Keep setup focused">
+  The setup phase should only initialize dependencies. Application logic belongs in `main`.
+</Step>
+
+<Step title="Return what you need">
+  Only return the dependencies that `main` needs to access. Keep the extras object focused and minimal.
+</Step>
+
+<Step title="Handle setup errors">
+  Let errors propagate from setup to prevent the service from starting with broken dependencies.
+</Step>
+
+</Steps>
+
+## What's next?
+
+- [Graceful shutdown](/guides/graceful-shutdown) - Clean up resources properly during shutdown
+- [Environment validation](/guides/environment-validation) - Validate configuration before setup runs

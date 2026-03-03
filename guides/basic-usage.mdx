@@ -1,0 +1,138 @@
+---
+title: Basic usage
+description: Learn how to use EntryKit to create structured Node.js service entrypoints with type-safe environment validation
+---
+
+EntryKit provides a streamlined way to structure your Node.js service entrypoints with built-in environment validation, setup lifecycle management, and graceful shutdown handling.
+
+## Getting started
+
+First, install EntryKit in your project:
+
+```bash
+npm install entrykit
+```
+
+## Simple entrypoint
+
+The most basic usage of EntryKit involves creating an entrypoint with a `main` function:
+
+```typescript
+import { entry } from "entrykit";
+
+await entry({
+  name: "my-service",
+  main: async () => {
+    console.log("Service started!");
+    
+    // Your service logic here
+    
+    // Optionally return a cleanup function
+    return () => {
+      console.log("Service shutting down...");
+    };
+  }
+});
+```
+
+<Note>
+The `main` function is called immediately after the entrypoint is initialized. If you return a cleanup function, it will be automatically invoked on SIGTERM and SIGINT signals.
+</Note>
+
+## Key concepts
+
+<Steps>
+
+<Step title="Define your entrypoint">
+  Every entrypoint requires a `name` property to identify your service and a `main` function that contains your application logic.
+</Step>
+
+<Step title="Implement your logic">
+  The `main` function can be synchronous or asynchronous. This is where you start servers, connect to databases, or initialize your application.
+</Step>
+
+<Step title="Return cleanup function (optional)">
+  If your service needs to perform cleanup operations during shutdown, return a function from `main`. This function will be called automatically when the process receives shutdown signals.
+</Step>
+
+</Steps>
+
+## Understanding the cleanup function
+
+The cleanup function returned from `main` is automatically registered for SIGTERM and SIGINT signals:
+
+```typescript
+import { entry } from "entrykit";
+import { createServer } from "http";
+
+await entry({
+  name: "http-server",
+  main: async () => {
+    const server = createServer((req, res) => {
+      res.writeHead(200, { "Content-Type": "text/plain" });
+      res.end("Hello World");
+    });
+    
+    server.listen(3000);
+    console.log("Server listening on port 3000");
+    
+    // Return cleanup function to gracefully close server
+    return () => {
+      server.close(() => {
+        console.log("Server closed");
+      });
+    };
+  }
+});
+```
+
+<Tip>
+If your `main` function doesn't return anything (or returns `undefined`), EntryKit will simply skip cleanup registration. This is useful for services that don't require explicit cleanup.
+</Tip>
+
+## Synchronous vs asynchronous
+
+Both `main` and cleanup functions can be synchronous or asynchronous:
+
+<CodeGroup>
+
+```typescript Synchronous
+import { entry } from "entrykit";
+
+await entry({
+  name: "sync-service",
+  main: () => {
+    console.log("Started synchronously");
+    
+    return () => {
+      console.log("Cleanup executed synchronously");
+    };
+  }
+});
+```
+
+```typescript Asynchronous
+import { entry } from "entrykit";
+
+await entry({
+  name: "async-service",
+  main: async () => {
+    await someAsyncInitialization();
+    console.log("Started asynchronously");
+    
+    return () => {
+      console.log("Cleanup executed");
+    };
+  }
+});
+```
+
+</CodeGroup>
+
+## What's next?
+
+Now that you understand the basics, explore these advanced features:
+
+- [Environment validation](/guides/environment-validation) - Validate environment variables with ArkType
+- [Setup lifecycle](/guides/setup-lifecycle) - Use dependency injection with the setup phase
+- [Graceful shutdown](/guides/graceful-shutdown) - Handle cleanup operations properly
