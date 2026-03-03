@@ -1,0 +1,42 @@
+{
+  "projectType": "sdk-library",
+  "projectName": "EntryKit",
+  "projectDescription": "A lightweight TypeScript library for building structured entrypoints for Node.js services with environment validation and graceful shutdown handling.",
+  "theme": "palm",
+  "primaryColor": "#3B82F6",
+  "lightColor": "#60A5FA",
+  "darkColor": "#2563EB",
+  "navigation": {
+    "groups": [
+      {
+        "group": "Get Started",
+        "pages": ["introduction", "installation", "quickstart"]
+      },
+      {
+        "group": "Guides",
+        "pages": ["guides/basic-usage", "guides/environment-validation", "guides/setup-lifecycle", "guides/graceful-shutdown"]
+      },
+      {
+        "group": "API Reference",
+        "pages": ["api/entry", "api/types"]
+      },
+      {
+        "group": "Examples",
+        "pages": ["examples/basic-service", "examples/api-server", "examples/database-service"]
+      }
+    ]
+  },
+  "keyFeatures": [
+    "Type-safe environment variable validation with ArkType",
+    "Optional async setup lifecycle with dependency injection",
+    "Automatic graceful shutdown handling (SIGTERM/SIGINT)",
+    "Minimal API surface with TypeScript-first design"
+  ],
+  "publicApiSurface": [
+    "entry(options)",
+    "type (re-exported from arktype)",
+    "WithSetup interface",
+    "WithoutSetup interface",
+    "MaybeCleanupFunction type"
+  ]
+}
